@@ -130,7 +130,8 @@ def bleed_layer_effect(mask: torch.Tensor, strength: float = 0.1) -> torch.Tenso
     )  # [L,H,W]
 
     # Combine original mask with bleed from neighbors
-    return mask + strength * blurred
+    # Clamp to [0,1] to prevent invalid opacity values (Bug #16 fix)
+    return torch.clamp(mask + strength * blurred, 0.0, 1.0)
 
 
 @torch.jit.script
@@ -173,9 +174,13 @@ def composite_image_cont(
     eff_thick = torch.clamp(p_print_bleed, 0.0, 1.0) * h
     thick_ratio = eff_thick / layer_TDs.view(-1, 1, 1)  # [L,H,W]
 
-    o, A, k, b = -1.2416557e-02, 9.6407950e-01, 3.4103447e01, -4.1554203e00
-    opac = o + (A * torch.log1p(k * thick_ratio) + b * thick_ratio)
-    opac = torch.clamp(opac, 0.0, 1.0)  # [L,H,W]
+    # Bug #15 Fix: Use Beer-Lambert law for physically correct opacity
+    # opacity = 1 - exp(-k * thick_ratio)
+    # where thick_ratio = thickness / TD
+    # k=30 calibrated to match empirical behavior: ~95% opacity at thick_ratio=0.1
+    # (for typical h=0.04mm, TD=3mm, this is ~7.5 layers)
+    k_opacity = 30.0
+    opac = 1.0 - torch.exp(-k_opacity * thick_ratio)  # [L,H,W]
 
     # 5. flip to top→bottom order before compositing
     opac_fb = torch.flip(opac, dims=[0])  # [L,H,W]
@@ -295,9 +300,13 @@ def composite_image_disc(
     eff_thick = torch.clamp(p_print_bleed, 0.0, 1.0) * h
     thick_ratio: torch.Tensor = eff_thick / layer_TDs.view(-1, 1, 1)  # [L,H,W]
 
-    o, A, k, b = -1.2416557e-02, 9.6407950e-01, 3.4103447e01, -4.1554203e00
-    opac: torch.Tensor = o + (A * torch.log1p(k * thick_ratio) + b * thick_ratio)
-    opac = torch.clamp(opac, 0.0, 1.0)  # [L,H,W]
+    # Bug #15 Fix: Use Beer-Lambert law for physically correct opacity
+    # opacity = 1 - exp(-k * thick_ratio)
+    # where thick_ratio = thickness / TD
+    # k=30 calibrated to match empirical behavior: ~95% opacity at thick_ratio=0.1
+    # (for typical h=0.04mm, TD=3mm, this is ~7.5 layers)
+    k_opacity = 30.0
+    opac: torch.Tensor = 1.0 - torch.exp(-k_opacity * thick_ratio)  # [L,H,W]
 
     # 5. Top-to-bottom compositing (same flipping trick as before).
     opac_fb = torch.flip(opac, dims=[0])  # [L,H,W]

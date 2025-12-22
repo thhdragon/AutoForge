@@ -97,9 +97,7 @@ def init_height_map_depth_color_adjusted(
 
     target_uint8 = target.astype(np.uint8)
     image_pil = Image.fromarray(target_uint8)
-    pipe = pipeline(
-        task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf"
-    )
+    pipe = pipeline(task="depth-estimation", model="depth-anything/DA3MONO-LARGE")
     depth_result = pipe(image_pil)
     depth_map = depth_result["depth"]
     if hasattr(depth_map, "convert"):

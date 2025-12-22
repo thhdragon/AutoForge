@@ -89,6 +89,6 @@ def compute_loss(
     # Normalize by average weight so scale comparable to original MSE
     total_loss = weighted_loss.mean() / weights.mean()
 
-    return total_loss.mean()
+    return total_loss
 
     # (Additional smoothness and penalties are currently disabled.)

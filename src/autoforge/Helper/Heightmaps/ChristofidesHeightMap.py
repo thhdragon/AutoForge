@@ -5,12 +5,12 @@ import numpy as np
 from joblib import Parallel, delayed
 from scipy.spatial.distance import cdist
 from skimage.color import rgb2lab
-from sklearn.cluster import MiniBatchKMeans, KMeans
+from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.metrics import silhouette_score
 
 
 def _compute_distinctiveness(centroids: np.ndarray) -> np.ndarray:
-    """Return the minimum inter‑centroid distance for every centroid."""
+    """Return the minimum inter-centroid distance for every centroid."""
     dmat = cdist(centroids, centroids, metric="euclidean")
     np.fill_diagonal(dmat, np.inf)
     return dmat.min(axis=1)
@@ -26,13 +26,12 @@ def two_stage_weighted_kmeans(
     random_state: int | None = None,
 ):
     """Segment *target_lab* (reshaped (N,3)) into *final_k* clusters using a
-    two‑stage weighted K‑Means.  Returns (final_centroids, final_labels).
+    two-stage weighted K-Means.  Returns (final_centroids, final_labels).
 
-    The pixel‑level data are *only* used in stage‑1; stage‑2 runs on the much
-    smaller set of stage‑1 centroids which makes this fast and memory‑friendly.
+    The pixel-level data are *only* used in stage-1; stage-2 runs on the much
+    smaller set of stage-1 centroids which makes this fast and memory-friendly.
     """
-
-    # Stage 1: heavy over‑segmentation so that even tiny colour modes appear.
+    # Stage 1: heavy over-segmentation so that even tiny colour modes appear.
     kmeans1 = MiniBatchKMeans(
         n_clusters=overcluster_k,
         random_state=random_state,
@@ -48,7 +47,7 @@ def two_stage_weighted_kmeans(
         distinct /= distinct.max()
     weights = counts1 * (1.0 + beta_distinct * distinct)
 
-    # Weighted K‑Means on the centroid set.
+    # Weighted K-Means on the centroid set.
     kmeans2 = KMeans(
         n_clusters=final_k,
         random_state=random_state,
@@ -71,8 +70,7 @@ def two_stage_weighted_kmeans(
 
 
 def build_distance_matrix(labs, nodes):
-    """
-    Given an array labs (with shape (N, dims)) and a list of node indices,
+    """Given an array labs (with shape (N, dims)) and a list of node indices,
     return a distance matrix (NumPy array) of shape (len(nodes), len(nodes)).
     """
     pts = labs[nodes]  # extract only the points corresponding to nodes
@@ -81,8 +79,7 @@ def build_distance_matrix(labs, nodes):
 
 
 def sample_pixels_for_silhouette(labels, sample_size=5000, random_state=None):
-    """
-    Flatten the label map, draw at most sample_size random positions,
+    """Flatten the label map, draw at most sample_size random positions,
     and return their (index, label) pairs ready for silhouette_score.
     """
     rng = np.random.default_rng(random_state)
@@ -98,10 +95,12 @@ def sample_pixels_for_silhouette(labels, sample_size=5000, random_state=None):
 
 
 def segmentation_quality(
-    target_lab_reshaped, labels, sample_size=5000, random_state=None
+    target_lab_reshaped,
+    labels,
+    sample_size=5000,
+    random_state=None,
 ):
-    """
-    Compute the silhouette coefficient on a random pixel subset.
+    """Compute the silhouette coefficient on a random pixel subset.
     Works in Lab because `target_lab_reshaped` is already weighted Lab.
     """
     idx, lbl_subset = sample_pixels_for_silhouette(labels, sample_size, random_state)
@@ -114,8 +113,7 @@ def segmentation_quality(
 
 
 def matrix_to_graph(matrix, nodes):
-    """
-    Convert a 2D NumPy array (matrix) into a dictionary-of-dicts graph,
+    """Convert a 2D NumPy array (matrix) into a dictionary-of-dicts graph,
     where graph[u][v] = matrix[i][j] for u = nodes[i], v = nodes[j].
     """
     graph = {}
@@ -154,7 +152,7 @@ class UnionFind:
 
     def union(self, *objects):
         roots = [self[x] for x in objects]
-        heaviest = max(((self.weights[r], r) for r in roots))[1]
+        heaviest = max((self.weights[r], r) for r in roots)[1]
         for r in roots:
             if r != heaviest:
                 self.weights[heaviest] += self.weights[r]
@@ -231,12 +229,12 @@ def christofides_tsp(graph):
 
 
 def prune_ordering(ordering, labs, bg, fg, min_length=3, improvement_factor=1.5):
-    """
-    Iteratively remove clusters from the ordering if doing so significantly reduces
+    """Iteratively remove clusters from the ordering if doing so significantly reduces
     the total Lab-space distance. Only clusters that produce an improvement greater
     than improvement_factor * (median gap) are removed.
 
-    Parameters:
+    Parameters
+    ----------
       ordering: list of cluster indices (the current ordering)
       labs: Lab-space coordinates (indexed by cluster index)
       bg: background anchor (never removed)
@@ -244,8 +242,10 @@ def prune_ordering(ordering, labs, bg, fg, min_length=3, improvement_factor=1.5)
       min_length: minimum allowed length of ordering
       improvement_factor: factor multiplied by the median gap to decide if a cluster is an outlier
 
-    Returns:
+    Returns
+    -------
       A pruned ordering that hopefully removes only extreme outliers.
+
     """
     current_order = ordering.copy()
     improved = True
@@ -269,7 +269,7 @@ def prune_ordering(ordering, labs, bg, fg, min_length=3, improvement_factor=1.5)
             d1 = np.linalg.norm(labs[current_order[i]] - labs[current_order[i - 1]])
             d2 = np.linalg.norm(labs[current_order[i + 1]] - labs[current_order[i]])
             direct = np.linalg.norm(
-                labs[current_order[i + 1]] - labs[current_order[i - 1]]
+                labs[current_order[i + 1]] - labs[current_order[i - 1]],
             )
             improvement = (d1 + d2) - direct
             # Remove the cluster if the improvement is large compared to median gap.
@@ -287,19 +287,21 @@ def prune_ordering(ordering, labs, bg, fg, min_length=3, improvement_factor=1.5)
 
 
 def create_mapping(final_ordering, labs, all_labels):
-    """
-    Creates a mapping from each cluster (from all_labels) to a value in [0,1].
+    """Creates a mapping from each cluster (from all_labels) to a value in [0,1].
     Clusters in final_ordering get evenly spaced values.
     For clusters that were pruned (i.e. not in final_ordering), assign the value
     of the nearest cluster in final_ordering (based on Lab-space distance).
 
-    Parameters:
+    Parameters
+    ----------
       final_ordering: list of cluster indices (after pruning)
       labs: array of Lab-space coordinates (indexed by cluster index)
       all_labels: sorted list of all unique clusters produced by KMeans
 
-    Returns:
+    Returns
+    -------
       mapping: a dict mapping each cluster label in all_labels to a float in [0,1].
+
     """
     mapping = {}
     n_order = len(final_ordering)
@@ -330,8 +332,7 @@ def create_mapping(final_ordering, labs, all_labels):
 
 
 def tsp_order_christofides_path(nodes, labs, bg, fg):
-    """
-    Ensure that the background and foreground nodes are always in the TSP cycle.
+    """Ensure that the background and foreground nodes are always in the TSP cycle.
     nodes: list of cluster indices (ideally including bg and fg)
     labs: Lab-space coordinates (indexed by cluster index)
     bg, fg: background and foreground cluster indices
@@ -391,7 +392,8 @@ def tsp_order_christofides_path(nodes, labs, bg, fg):
     if len(cycle) > 2:
         reversed_cycle = [cycle[0]] + cycle[1:-1][::-1] + [cycle[-1]]
         if compute_ordering_metric(reversed_cycle, labs) < compute_ordering_metric(
-            cycle, labs
+            cycle,
+            labs,
         ):
             cycle = reversed_cycle
 
@@ -402,8 +404,7 @@ def tsp_order_christofides_path(nodes, labs, bg, fg):
 
 
 def compute_ordering_metric(ordering, labs):
-    """
-    Computes a metric for the ordering as the total Lab-space distance between consecutive clusters.
+    """Computes a metric for the ordering as the total Lab-space distance between consecutive clusters.
     Uses vectorized operations for speed.
     """
     pts = labs[ordering]
@@ -448,8 +449,7 @@ def init_height_map(
     focus_map: Optional[np.ndarray] = None,
     focus_boost: float = 0.5,
 ):
-    """
-    init_method should be one of quantize_median,quantize_maxcoverage,quantize_fastoctree,kmeans
+    """init_method should be one of quantize_median,quantize_maxcoverage,quantize_fastoctree,kmeans
 
     Initializes pixel height logits by:
       1. Clustering the image into max_layers clusters (via KMeans).
@@ -495,7 +495,7 @@ def init_height_map(
     )
 
     if lab_space:
-        target_lab_for_quality = rgb2lab((target.astype(np.float32) / 255.0))
+        target_lab_for_quality = rgb2lab(target.astype(np.float32) / 255.0)
         target_lab_for_quality[..., 0] *= lab_weights[0]
         target_lab_for_quality[..., 1] *= lab_weights[1]
         target_lab_for_quality[..., 2] *= lab_weights[2]
@@ -626,7 +626,6 @@ def run_init_threads(
     lab_space = True
 
     if num_threads > 1:
-
         tasks = [
             delayed(init_height_map)(
                 target,
@@ -663,7 +662,8 @@ def run_init_threads(
                 material_colors=material_colors,
                 focus_map=focus_map,
                 focus_boost=focus_boost,
-            ) for i in range(num_runs)
+            )
+            for i in range(num_runs)
         ]
 
     metrics = [(r[2] / r[3]) / (r[4] + 1e-6) for r in results]
@@ -672,7 +672,7 @@ def run_init_threads(
     min_metric = np.min(metrics)
     max_metric = np.max(metrics)
     print(
-        f"mean: {mean_metric}, std: {std_metric}, min: {min_metric}, max: {max_metric}"
+        f"mean: {mean_metric}, std: {std_metric}, min: {min_metric}, max: {max_metric}",
     )
     print(f"Choosing best ordering with metric: {min_metric}")
     best_result = min(results, key=lambda x: x[2])

@@ -21,6 +21,9 @@ def load_materials(args):
             - material_TDs (jnp.ndarray): Array of material transmission/opacity parameters in float64.
             - material_names (list): List of material names.
             - colors_list (list): List of color hex strings.
+
+    Raises:
+        ValueError: If Transmissivity values are invalid (≤ 0).
     """
     df = load_materials_pandas(args)
     material_names = [
@@ -34,7 +37,23 @@ def load_materials(args):
         [hex_to_rgb(color) for color in colors_list], dtype=np.float64
     )
     material_TDs = np.array(material_TDs, dtype=np.float64)
+
+    # Validate Transmissivity values: must be positive to avoid division by zero
+    # in opacity calculations (thick_ratio = thickness / TD)
+    invalid_mask = material_TDs <= 0
+    if np.any(invalid_mask):
+        invalid_indices = np.where(invalid_mask)[0]
+        invalid_values = material_TDs[invalid_mask]
+        invalid_materials = [material_names[i] for i in invalid_indices]
+        raise ValueError(
+            f"Invalid Transmissivity values in CSV (must be > 0):\n"
+            f"  Materials: {invalid_materials}\n"
+            f"  Values: {invalid_values}\n"
+            f"Please check your CSV file and ensure all Transmissivity values are positive."
+        )
+
     return material_colors, material_TDs, material_names, colors_list
+
 
 def load_materials_pandas(args):
     csv_filename = args.csv_file
@@ -67,6 +86,7 @@ def load_materials_pandas(args):
         df = pd.DataFrame(data)
     return df
 
+
 def load_materials_data(args):
     """
     Load the full material data from the CSV file.
@@ -89,13 +109,36 @@ def hex_to_rgb(hex_str):
     Convert a hex color string to a normalized RGB list.
 
     Args:
-        hex_str (str): The hex color string (e.g., '#RRGGBB').
+        hex_str (str): The hex color string (e.g., '#RRGGBB' or '#RGB').
 
     Returns:
         list: A list of three floats representing the RGB values normalized to [0, 1].
+
+    Raises:
+        ValueError: If hex_str is not a valid hex color format.
     """
     hex_str = hex_str.lstrip("#")
-    return [int(hex_str[i : i + 2], 16) / 255.0 for i in (0, 2, 4)]
+
+    # Support 3-char hex: #ABC -> #AABBCC
+    if len(hex_str) == 3:
+        hex_str = "".join([c * 2 for c in hex_str])
+
+    # Validate length
+    if len(hex_str) != 6:
+        raise ValueError(
+            f"Invalid hex color length: #{hex_str} (expected 6 or 3 characters)"
+        )
+
+    # Validate and convert hex digits with better error messages
+    try:
+        r = int(hex_str[0:2], 16)
+        g = int(hex_str[2:4], 16)
+        b = int(hex_str[4:6], 16)
+        return [r / 255.0, g / 255.0, b / 255.0]
+    except ValueError:
+        raise ValueError(
+            f"Invalid hex digits in color: #{hex_str} (must contain only 0-9, A-F)"
+        )
 
 
 def extract_colors_from_swatches(swatch_data):

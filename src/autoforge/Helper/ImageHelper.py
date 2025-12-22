@@ -70,6 +70,8 @@ def srgb_to_lab(srgb, eps=1e-6):
         srgb / 12.92,
         torch.pow(torch.clamp((srgb + 0.055) / 1.055, min=eps), 2.4),
     )
+    # Bug #19 Fix: Clamp to valid range before XYZ conversion to prevent color space distortion
+    srgb_linear = torch.clamp(srgb_linear, 0.0, 1.0)
 
     # sRGB to XYZ conversion matrix (D65 illuminant)
     rgb_to_xyz = torch.tensor(

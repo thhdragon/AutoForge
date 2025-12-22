@@ -722,7 +722,9 @@ def _post_optimize_and_export(
         interval=1, namespace="post_opt", step=(post_opt_step := post_opt_step + 1)
     )
 
-    optimizer.pixel_height_logits = torch.from_numpy(pixel_height_logits_init)
+    optimizer.pixel_height_logits = torch.from_numpy(pixel_height_logits_init).to(
+        device
+    )
     optimizer.best_params["pixel_height_logits"] = torch.from_numpy(
         pixel_height_logits_init
     ).to(device)

@@ -87,6 +87,14 @@ class FilamentOptimizer:
         self.final_tau = args.final_tau
         self.vis_tau = args.final_tau
         self.init_tau = args.init_tau
+
+        # Validate tau schedule parameters
+        if self.init_tau < self.final_tau:
+            raise ValueError(
+                f"init_tau ({self.init_tau}) must be >= final_tau ({self.final_tau}). "
+                f"Tau annealing requires init_tau >= final_tau for temperature to cool over time."
+            )
+
         self.device = device
         self.best_swaps = 0
         self.perception_loss_module = perception_loss_module
@@ -153,9 +161,9 @@ class FilamentOptimizer:
         self.warmup_steps = min(
             args.iterations - 1, args.warmup_fraction * args.iterations
         )
-        self.decay_rate = (self.init_tau - self.final_tau) / (
-            args.iterations - self.warmup_steps
-        )
+        # Compute decay rate with protection against division by near-zero denominator
+        iterations_after_warmup = max(1, args.iterations - self.warmup_steps)
+        self.decay_rate = (self.init_tau - self.final_tau) / iterations_after_warmup
 
         # Initialize optimizer
         self.optimizer = CAdamW(
@@ -167,7 +175,7 @@ class FilamentOptimizer:
         self.best_discrete_loss = float("inf")
         self.best_params = None
         self.best_tau = None
-        self.best_seed = None
+        self.best_seed = 0
         self.best_step = None
 
         # If you want a figure for real-time visualization:
@@ -297,7 +305,7 @@ class FilamentOptimizer:
         )
 
         if self.num_steps_done < warmup_steps and warmup_steps > 0:
-            lr_scale = self.num_steps_done / warmup_steps
+            lr_scale = (self.num_steps_done + 1) / warmup_steps
             self.current_learning_rate = lr_scale * self.learning_rate
         else:
             self.current_learning_rate = self.learning_rate
@@ -372,7 +380,7 @@ class FilamentOptimizer:
         global_logits = params["global_logits"]
         pixel_heights = (max_layers * h) * torch.sigmoid(effective_logits)
         discrete_height_image = torch.round(pixel_heights / h).to(torch.int32)
-        discrete_height_image = torch.clamp(discrete_height_image, 0, max_layers)
+        discrete_height_image = torch.clamp(discrete_height_image, 0, max_layers - 1)
 
         num_layers = global_logits.shape[0]
         discrete_global_vals = []
@@ -416,7 +424,9 @@ class FilamentOptimizer:
             if not prefix:
                 self.writer.add_scalar("Params/tau_height", tau_height, steps)
                 self.writer.add_scalar("Params/tau_global", tau_global, steps)
-                self.writer.add_scalar("Params/lr", self.optimizer.param_groups[0]["lr"], steps)
+                self.writer.add_scalar(
+                    "Params/lr", self.optimizer.param_groups[0]["lr"], steps
+                )
                 self.writer.add_scalar("Loss/train", self.loss, steps)
 
             # Log images periodically
@@ -777,5 +787,7 @@ class FilamentOptimizer:
         """
         Clean up resources when the optimizer is destroyed.
         """
-        if self.writer is not None:
+        # Use hasattr to safely check if writer was initialized
+        # (it may not be if an error occurred during __init__)
+        if hasattr(self, "writer") and self.writer is not None:
             self.writer.close()

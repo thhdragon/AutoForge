@@ -127,6 +127,12 @@ def generate_project_file(
         )
 
     for idx in filament_indices:
+        # BUG FIX #10: Add bounds checking for material index
+        if not (0 <= idx < len(material_data)):
+            raise ValueError(
+                f"Invalid material index {idx}, have {len(material_data)} materials. "
+                f"Ensure discrete_global values are within valid material range [0, {len(material_data) - 1}]."
+            )
         mat = material_data[idx]
         filament_set.append(
             {
@@ -478,11 +484,11 @@ def generate_flatforge_stls(
 ):
     """
     Generate separate STL files for FlatForge mode.
-    
-    In FlatForge mode, each color gets its own STL file, along with STLs for the 
+
+    In FlatForge mode, each color gets its own STL file, along with STLs for the
     background and optional cap layer. The STLs are designed to align perfectly
     when loaded together to create a solid rectangular print.
-    
+
     Args:
         disc_global (np.ndarray): Array of discrete global material assignments (one per layer).
         disc_height_image (np.ndarray): 2D array representing the discrete height at each pixel.
@@ -496,43 +502,47 @@ def generate_flatforge_stls(
         output_folder (str): Folder to save the STL files.
         cap_layers (int): Number of complete transparent layers to add on top.
         alpha_mask (np.ndarray): Optional alpha mask (same shape as disc_height_image).
-    
+
     Returns:
         list: List of filenames for the generated STL files.
     """
     H, W = disc_height_image.shape
     max_layer = int(np.max(disc_height_image))
-    
+
     if max_layer == 0:
         print("Warning: No layers to print in FlatForge mode.")
         return []
-    
+
     # Determine valid mask
     valid_mask = (
         np.ones((H, W), dtype=bool) if alpha_mask is None else (alpha_mask >= 128)
     )
-    
+
     # Find the most transparent material (highest TD value) for clear areas
     most_transparent_idx = int(np.argmax(material_TDs_np))
-    clear_material_name = material_names[most_transparent_idx].replace(" ", "_").replace("/", "-")
+    clear_material_name = (
+        material_names[most_transparent_idx].replace(" ", "_").replace("/", "-")
+    )
     clear_rgb = material_colors_np[most_transparent_idx]
     clear_color_hex = "{:02x}{:02x}{:02x}".format(
         int(clear_rgb[0] * 255), int(clear_rgb[1] * 255), int(clear_rgb[2] * 255)
     )
-    print(f"Selected clear material: {material_names[most_transparent_idx]} (TD: {material_TDs_np[most_transparent_idx]:.2f})")
-    
+    print(
+        f"Selected clear material: {material_names[most_transparent_idx]} (TD: {material_TDs_np[most_transparent_idx]:.2f})"
+    )
+
     # Create a 3D array: [layer, height, width] where each entry indicates which material is at that position
     # Initialize with -1 (no material)
     layer_materials = np.full((max_layer, H, W), -1, dtype=int)
-    
+
     # For each pixel, assign materials to layers based on disc_height_image and disc_global
     for i in range(H):
         for j in range(W):
             if not valid_mask[i, j]:
                 continue
-            
+
             pixel_height = int(disc_height_image[i, j])
-            
+
             # Assign materials from layer 0 to min(pixel_height, max_layer)-1
             # Fill any gaps in disc_global by extending the last color from below
             # This ensures there's no clear between two colored layers
@@ -548,27 +558,27 @@ def generate_flatforge_stls(
                     # This prevents clear from being placed between two colored layers
                     layer_materials[layer, i, j] = last_color
                 # else: both material and last_color are -1, leave as -1
-    
+
     # Get unique materials used (excluding background)
     unique_materials = np.unique(disc_global[:max_layer])
     unique_materials = [int(m) for m in unique_materials if m >= 0]
-    
+
     # Calculate the total height of the print (including cap layers)
     total_height = background_height + (max_layer + cap_layers) * layer_height
-    
+
     stl_files = []
-    
+
     # Helper function to create a flat box STL for a given material at specific layers
     def create_color_stl(material_idx, material_name, color_hex):
         """Create an STL for a specific material/color."""
         # Find which layers and pixels use this material
-        material_mask_3d = (layer_materials == material_idx)
-        
+        material_mask_3d = layer_materials == material_idx
+
         # Create a height map for this material
         # For each pixel, find the maximum layer that uses this material
         height_map = np.zeros((H, W), dtype=float)
         min_height_map = np.full((H, W), max_layer + cap_layers, dtype=float)
-        
+
         has_material = False
         for layer in range(max_layer):
             for i in range(H):
@@ -581,33 +591,39 @@ def generate_flatforge_stls(
                         # Track the lowest layer this material appears at this pixel
                         if layer < min_height_map[i, j]:
                             min_height_map[i, j] = layer
-        
+
         if not has_material:
             return None
-        
+
         # Convert to mm (layers to mm)
         height_map_mm = height_map * layer_height
         min_height_map_mm = min_height_map * layer_height
-        
+
         # Create a 2D mask indicating which pixels have this material (at any layer)
         material_mask_2d = np.any(material_mask_3d, axis=0)
-        
+
         # Create vertices for the box
         # We need to create a rectangular box where z goes from min to max for each pixel
-        filename = os.path.join(output_folder, f"{material_name}_{color_hex.lstrip('#')}.stl")
-        
+        filename = os.path.join(
+            output_folder, f"{material_name}_{color_hex.lstrip('#')}.stl"
+        )
+
         # Build mesh with per-pixel min and max heights
         mesh_data = _create_flatforge_box_mesh(
-            height_map_mm, min_height_map_mm, background_height, 
-            maximum_x_y_size, valid_mask, material_mask_2d
+            height_map_mm,
+            min_height_map_mm,
+            background_height,
+            maximum_x_y_size,
+            valid_mask,
+            material_mask_2d,
         )
-        
+
         if mesh_data is not None:
             _save_stl_with_manifold_fix(mesh_data, filename)
             stl_files.append(filename)
             return filename
         return None
-    
+
     # Generate STL for each unique material
     for mat_idx in unique_materials:
         material_name = material_names[mat_idx].replace(" ", "_").replace("/", "-")
@@ -616,99 +632,155 @@ def generate_flatforge_stls(
         color_hex = "#{:02x}{:02x}{:02x}".format(
             int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
         )
-        
+
         print(f"Generating FlatForge STL for {material_name}...")
         create_color_stl(mat_idx, material_name, color_hex)
-    
-    # Generate STL for clear/transparent areas
+
+    # Generate STL for clear/transparent areas (per-pixel material tracking)
     # Clear should ONLY be placed above the topmost colored material, never between colors
-    # Since gaps between colors are filled by extending the color from below during material assignment,
-    # we only need to check if the pixel height is less than max_layer (unfilled top layers)
+    # Track which material (color) is at the top of each pixel, and use that for clear areas
     print("Generating FlatForge STL for clear areas...")
-    
-    # Find positions where clear is needed (above all colored materials)
-    clear_height_map = np.zeros((H, W), dtype=float)
-    clear_min_height_map = np.full((H, W), max_layer, dtype=float)
-    
-    has_clear = False
+
+    # For each pixel, track which material is at its topmost layer
+    topmost_material_map = np.full((H, W), -1, dtype=int)
+
     for i in range(H):
         for j in range(W):
             if not valid_mask[i, j]:
                 continue
-            
+
             pixel_height = int(disc_height_image[i, j])
-            
-            # If pixel height is less than max_layer, fill the top with clear
+            if pixel_height > 0 and pixel_height <= max_layer:
+                # Get the material used at layer (pixel_height - 1)
+                topmost_material = int(disc_global[pixel_height - 1])
+                topmost_material_map[i, j] = topmost_material
+
+    # Group pixels by their topmost material
+    clear_materials = {}  # material_idx -> list of (i, j) tuples
+
+    for i in range(H):
+        for j in range(W):
+            if not valid_mask[i, j]:
+                continue
+
+            pixel_height = int(disc_height_image[i, j])
+
+            # Only process if pixel has clear area above it
             if pixel_height < max_layer:
-                has_clear = True
-                clear_min_height_map[i, j] = pixel_height
-                clear_height_map[i, j] = max_layer
-            # Note: We don't check layer_materials because gaps are already filled with colors
-    
-    if has_clear:
+                topmost_mat = topmost_material_map[i, j]
+                if topmost_mat >= 0:
+                    if topmost_mat not in clear_materials:
+                        clear_materials[topmost_mat] = []
+                    clear_materials[topmost_mat].append((i, j, pixel_height))
+
+    # Generate a separate clear STL for each material's transparent variant
+    has_any_clear = len(clear_materials) > 0
+
+    for material_idx, clear_positions in clear_materials.items():
+        # Create height maps for this material's clear areas
+        clear_height_map = np.zeros((H, W), dtype=float)
+        clear_min_height_map = np.full((H, W), max_layer, dtype=float)
+        clear_mask_for_material = np.zeros((H, W), dtype=bool)
+
+        for i, j, pixel_height in clear_positions:
+            clear_min_height_map[i, j] = pixel_height
+            clear_height_map[i, j] = max_layer
+            clear_mask_for_material[i, j] = True
+
+        # Use the material's color for the clear STL (it will be transparent with this color)
+        rgb = material_colors_np[material_idx]
+        color_hex = "#{:02x}{:02x}{:02x}".format(
+            int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
+        )
+        material_name = material_names[material_idx].replace(" ", "_").replace("/", "-")
+
         clear_height_map_mm = clear_height_map * layer_height
         clear_min_height_map_mm = clear_min_height_map * layer_height
-        
-        # Create mask for clear areas
-        clear_mask = (clear_height_map > 0) & valid_mask
-        
-        filename = os.path.join(output_folder, f"Clear_{clear_material_name}_{clear_color_hex}.stl")
+
+        filename = os.path.join(
+            output_folder, f"Clear_{material_name}_{color_hex.lstrip('#')}.stl"
+        )
         mesh_data = _create_flatforge_box_mesh(
-            clear_height_map_mm, clear_min_height_map_mm, background_height,
-            maximum_x_y_size, valid_mask, clear_mask
+            clear_height_map_mm,
+            clear_min_height_map_mm,
+            background_height,
+            maximum_x_y_size,
+            valid_mask,
+            clear_mask_for_material,
         )
         if mesh_data is not None:
             _save_stl_with_manifold_fix(mesh_data, filename)
             stl_files.append(filename)
-    else:
+
+    if not has_any_clear:
         print("No clear areas needed - all layers filled with colored materials.")
-    
+
     # Generate cap layer if requested
     if cap_layers > 0:
         print(f"Generating FlatForge STL for cap layer ({cap_layers} layers)...")
         # Cap layer covers the entire valid area at the top, creating a flat top surface
         # The cap should be ONLY transparent filament with thickness = cap_layers * layer_height
         # It starts at max_layer (above all other layers) and extends to max_layer + cap_layers
-        cap_height_map = np.full((H, W), (max_layer + cap_layers) * layer_height, dtype=float)
+        cap_height_map = np.full(
+            (H, W), (max_layer + cap_layers) * layer_height, dtype=float
+        )
         cap_min_height_map = np.full((H, W), max_layer * layer_height, dtype=float)
-        
+
         # Cap covers all valid pixels to ensure flat top
         cap_mask = valid_mask
-        
-        filename = os.path.join(output_folder, f"Cap_{clear_material_name}_{clear_color_hex}.stl")
+
+        filename = os.path.join(
+            output_folder, f"Cap_{clear_material_name}_{clear_color_hex}.stl"
+        )
         mesh_data = _create_flatforge_box_mesh(
-            cap_height_map, cap_min_height_map, background_height,
-            maximum_x_y_size, valid_mask, cap_mask
+            cap_height_map,
+            cap_min_height_map,
+            background_height,
+            maximum_x_y_size,
+            valid_mask,
+            cap_mask,
         )
         if mesh_data is not None:
             _save_stl_with_manifold_fix(mesh_data, filename)
             stl_files.append(filename)
-    
+
     # Generate background STL
     print("Generating FlatForge STL for background...")
     # Background is a flat layer at the bottom covering the entire valid area
     bg_height_map = np.full((H, W), background_height, dtype=float)
     bg_min_height_map = np.zeros((H, W), dtype=float)
     bg_mask = valid_mask
-    
-    filename = os.path.join(output_folder, f"Background_{background_color_hex.lstrip('#')}.stl")
+
+    filename = os.path.join(
+        output_folder, f"Background_{background_color_hex.lstrip('#')}.stl"
+    )
     mesh_data = _create_flatforge_box_mesh(
-        bg_height_map, bg_min_height_map, 0.0,  # No additional offset for background
-        maximum_x_y_size, valid_mask, bg_mask
+        bg_height_map,
+        bg_min_height_map,
+        0.0,  # No additional offset for background
+        maximum_x_y_size,
+        valid_mask,
+        bg_mask,
     )
     if mesh_data is not None:
         _save_stl_with_manifold_fix(mesh_data, filename)
         stl_files.append(filename)
-    
+
     print(f"FlatForge mode: Generated {len(stl_files)} STL files.")
     return stl_files
 
 
-def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset, 
-                                maximum_x_y_size, valid_mask, material_mask):
+def _create_flatforge_box_mesh(
+    max_height_map,
+    min_height_map,
+    z_offset,
+    maximum_x_y_size,
+    valid_mask,
+    material_mask,
+):
     """
     Create a mesh for FlatForge where each pixel can have a different min and max height.
-    
+
     Args:
         max_height_map (np.ndarray): Maximum height for each pixel (in mm).
         min_height_map (np.ndarray): Minimum height for each pixel (in mm).
@@ -716,37 +788,37 @@ def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset,
         maximum_x_y_size (float): Maximum size for x and y dimensions.
         valid_mask (np.ndarray): Boolean mask of valid pixels.
         material_mask (np.ndarray): Boolean mask of pixels that have this material.
-    
+
     Returns:
         tuple: (vertices, faces) or None if no valid geometry.
     """
     H, W = max_height_map.shape
-    
+
     # Only process pixels that are both valid and have this material
     active_mask = valid_mask & material_mask
-    
+
     if not np.any(active_mask):
         return None
-    
+
     # Create coordinate grids
     j, i = np.meshgrid(np.arange(W), np.arange(H))
     x = j.astype(np.float32)
     y = (H - 1 - i).astype(np.float32)
-    
+
     # Scale to match maximum_x_y_size
     original_max = max(W - 1, H - 1)
     scale = maximum_x_y_size / original_max
     x = x * scale
     y = y * scale
-    
+
     # Create top and bottom vertex grids
     z_top = max_height_map.astype(np.float32) + z_offset
     z_bottom = min_height_map.astype(np.float32) + z_offset
-    
+
     # Stack into vertex arrays [H, W, 3]
     top_vertices = np.stack([x, y, z_top], axis=2)
     bottom_vertices = np.stack([x, y, z_bottom], axis=2)
-    
+
     # Build quad mesh only for active pixels
     # A quad is valid if all four corners are active
     quad_valid = (
@@ -755,39 +827,37 @@ def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset,
         & active_mask[1:, 1:]
         & active_mask[1:, :-1]
     )
-    
+
     valid_i, valid_j = np.nonzero(quad_valid)
     num_quads = len(valid_i)
-    
+
     if num_quads == 0:
         return None
-    
+
     # Get quad corners
     v0 = top_vertices[valid_i, valid_j]
     v1 = top_vertices[valid_i, valid_j + 1]
     v2 = top_vertices[valid_i + 1, valid_j + 1]
     v3 = top_vertices[valid_i + 1, valid_j]
-    
+
     # Top surface triangles
-    top_triangles = np.concatenate([
-        np.stack([v2, v1, v0], axis=1),
-        np.stack([v3, v2, v0], axis=1)
-    ], axis=0)
-    
+    top_triangles = np.concatenate(
+        [np.stack([v2, v1, v0], axis=1), np.stack([v3, v2, v0], axis=1)], axis=0
+    )
+
     # Bottom surface triangles
     bv0 = bottom_vertices[valid_i, valid_j]
     bv1 = bottom_vertices[valid_i, valid_j + 1]
     bv2 = bottom_vertices[valid_i + 1, valid_j + 1]
     bv3 = bottom_vertices[valid_i + 1, valid_j]
-    
-    bottom_triangles = np.concatenate([
-        np.stack([bv0, bv1, bv2], axis=1),
-        np.stack([bv0, bv2, bv3], axis=1)
-    ], axis=0)
-    
+
+    bottom_triangles = np.concatenate(
+        [np.stack([bv0, bv1, bv2], axis=1), np.stack([bv0, bv2, bv3], axis=1)], axis=0
+    )
+
     # Side walls - same logic as in generate_stl
     side_triangles_list = []
-    
+
     # Left edges
     left_cond = np.zeros_like(quad_valid, dtype=bool)
     left_cond[:, 0] = quad_valid[:, 0]
@@ -798,12 +868,12 @@ def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset,
         lv1 = top_vertices[li + 1, lj]
         lb0 = bottom_vertices[li, lj]
         lb1 = bottom_vertices[li + 1, lj]
-        left_tris = np.concatenate([
-            np.stack([lv0, lv1, lb1], axis=1),
-            np.stack([lv0, lb1, lb0], axis=1)
-        ], axis=0)
+        left_tris = np.concatenate(
+            [np.stack([lv0, lv1, lb1], axis=1), np.stack([lv0, lb1, lb0], axis=1)],
+            axis=0,
+        )
         side_triangles_list.append(left_tris)
-    
+
     # Right edges
     right_cond = np.zeros_like(quad_valid, dtype=bool)
     right_cond[:, -1] = quad_valid[:, -1]
@@ -814,12 +884,12 @@ def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset,
         rv1 = top_vertices[ri + 1, rj + 1]
         rb0 = bottom_vertices[ri, rj + 1]
         rb1 = bottom_vertices[ri + 1, rj + 1]
-        right_tris = np.concatenate([
-            np.stack([rv0, rv1, rb1], axis=1),
-            np.stack([rv0, rb1, rb0], axis=1)
-        ], axis=0)
+        right_tris = np.concatenate(
+            [np.stack([rv0, rv1, rb1], axis=1), np.stack([rv0, rb1, rb0], axis=1)],
+            axis=0,
+        )
         side_triangles_list.append(right_tris)
-    
+
     # Top edges
     top_cond = np.zeros_like(quad_valid, dtype=bool)
     top_cond[0, :] = quad_valid[0, :]
@@ -830,12 +900,12 @@ def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset,
         tv1 = top_vertices[ti, tj + 1]
         tb0 = bottom_vertices[ti, tj]
         tb1 = bottom_vertices[ti, tj + 1]
-        top_wall_tris = np.concatenate([
-            np.stack([tv0, tv1, tb1], axis=1),
-            np.stack([tv0, tb1, tb0], axis=1)
-        ], axis=0)
+        top_wall_tris = np.concatenate(
+            [np.stack([tv0, tv1, tb1], axis=1), np.stack([tv0, tb1, tb0], axis=1)],
+            axis=0,
+        )
         side_triangles_list.append(top_wall_tris)
-    
+
     # Bottom edges
     bottom_cond = np.zeros_like(quad_valid, dtype=bool)
     bottom_cond[-1, :] = quad_valid[-1, :]
@@ -846,28 +916,33 @@ def _create_flatforge_box_mesh(max_height_map, min_height_map, z_offset,
         bv1_edge = top_vertices[bi + 1, bj + 1]
         bb0 = bottom_vertices[bi + 1, bj]
         bb1 = bottom_vertices[bi + 1, bj + 1]
-        bottom_wall_tris = np.concatenate([
-            np.stack([bv0_edge, bv1_edge, bb1], axis=1),
-            np.stack([bv0_edge, bb1, bb0], axis=1)
-        ], axis=0)
+        bottom_wall_tris = np.concatenate(
+            [
+                np.stack([bv0_edge, bv1_edge, bb1], axis=1),
+                np.stack([bv0_edge, bb1, bb0], axis=1),
+            ],
+            axis=0,
+        )
         side_triangles_list.append(bottom_wall_tris)
-    
+
     # Combine all triangles
     side_triangles = (
         np.concatenate(side_triangles_list, axis=0)
         if side_triangles_list
         else np.empty((0, 3, 3), dtype=np.float32)
     )
-    
-    all_triangles = np.concatenate([top_triangles, side_triangles, bottom_triangles], axis=0)
-    
+
+    all_triangles = np.concatenate(
+        [top_triangles, side_triangles, bottom_triangles], axis=0
+    )
+
     return all_triangles
 
 
 def _save_stl_with_manifold_fix(triangles, filename):
     """
     Save triangles to an STL file with manifold fixing.
-    
+
     Args:
         triangles (np.ndarray): Array of triangles with shape [num_triangles, 3, 3].
         filename (str): Output filename.
@@ -880,25 +955,27 @@ def _save_stl_with_manifold_fix(triangles, filename):
     norms = np.linalg.norm(normals, axis=1)
     norms[norms == 0] = 1
     normals /= norms[:, np.newaxis]
-    
+
     num_triangles = triangles.shape[0]
-    
+
     # Create structured array for binary STL
-    stl_dtype = np.dtype([
-        ("normal", np.float32, (3,)),
-        ("v1", np.float32, (3,)),
-        ("v2", np.float32, (3,)),
-        ("v3", np.float32, (3,)),
-        ("attr", np.uint16),
-    ])
-    
+    stl_dtype = np.dtype(
+        [
+            ("normal", np.float32, (3,)),
+            ("v1", np.float32, (3,)),
+            ("v2", np.float32, (3,)),
+            ("v3", np.float32, (3,)),
+            ("attr", np.uint16),
+        ]
+    )
+
     stl_data = np.empty(num_triangles, dtype=stl_dtype)
     stl_data["normal"] = normals
     stl_data["v1"] = triangles[:, 0, :]
     stl_data["v2"] = triangles[:, 1, :]
     stl_data["v3"] = triangles[:, 2, :]
     stl_data["attr"] = 0
-    
+
     # Write to buffer
     buffer = io.BytesIO()
     header = "FlatForge STL".encode("utf-8").ljust(80, b" ")
@@ -906,7 +983,7 @@ def _save_stl_with_manifold_fix(triangles, filename):
     buffer.write(struct.pack("<I", num_triangles))
     buffer.write(stl_data.tobytes())
     buffer.seek(0)
-    
+
     # Load with trimesh and fix manifold issues
     try:
         mesh = trimesh.load(buffer, file_type="stl")

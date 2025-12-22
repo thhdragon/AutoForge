@@ -69,20 +69,38 @@ def prune_num_colors(
     ) -> tuple[float, torch.Tensor]:
         dg_test = merge_color(dg_base, c_from, c_to)
         logits_for_disc = disc_to_logits(dg_test, num_materials, big_pos=1e5)
-        with _gpu_lock, torch.no_grad():
-            out_im = optimizer.get_best_discretized_image(
-                custom_global_logits=logits_for_disc
+        acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+        if not acquired:
+            raise RuntimeError(
+                f"GPU lock timeout: could not acquire lock within 10 seconds. "
+                f"Worker may be deadlocked or GPU unavailable."
             )
-            loss = compute_loss(comp=out_im, target=optimizer.target)
+        try:
+            with torch.no_grad():
+                out_im = optimizer.get_best_discretized_image(
+                    custom_global_logits=logits_for_disc
+                )
+                loss = compute_loss(comp=out_im, target=optimizer.target)
+        finally:
+            _gpu_lock.release()
         return loss, dg_test
 
     def get_image_loss(dg_test: torch.Tensor) -> float:
         logits_for_disc = disc_to_logits(dg_test, num_materials, big_pos=1e5)
-        with _gpu_lock, torch.no_grad():
-            out_im = optimizer.get_best_discretized_image(
-                custom_global_logits=logits_for_disc
+        acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+        if not acquired:
+            raise RuntimeError(
+                f"GPU lock timeout: could not acquire lock within 10 seconds. "
+                f"Worker may be deadlocked or GPU unavailable."
             )
-            loss = compute_loss(comp=out_im, target=optimizer.target)
+        try:
+            with torch.no_grad():
+                out_im = optimizer.get_best_discretized_image(
+                    custom_global_logits=logits_for_disc
+                )
+                loss = compute_loss(comp=out_im, target=optimizer.target)
+        finally:
+            _gpu_lock.release()
         return loss
 
     best_dg = disc_global.clone()
@@ -131,7 +149,7 @@ def prune_num_colors(
                 distinct_mats = torch.unique(best_dg)
                 optimizer.best_params["global_logits"] = disc_to_logits(
                     best_dg, num_materials=num_materials, big_pos=1e5
-                )
+                ).to(optimizer.device)
                 tbar.set_description(
                     f"Colors {len(distinct_mats)} | Loss {best_loss:.4f} | Merge pairs {len(merge_pairs)}"
                 )
@@ -152,7 +170,7 @@ def prune_num_colors(
     tbar.close()
     optimizer.best_params["global_logits"] = disc_to_logits(
         best_dg, num_materials=num_materials, big_pos=1e5
-    )
+    ).to(optimizer.device)
     return best_dg
 
 
@@ -177,21 +195,39 @@ def prune_num_swaps(
 
     def get_image_loss(dg_test: torch.Tensor) -> float:
         logits_for_disc = disc_to_logits(dg_test, num_materials, big_pos=1e5)
-        with _gpu_lock, torch.no_grad():
-            out_im = optimizer.get_best_discretized_image(
-                custom_global_logits=logits_for_disc
+        acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+        if not acquired:
+            raise RuntimeError(
+                f"GPU lock timeout: could not acquire lock within 10 seconds. "
+                f"Worker may be deadlocked or GPU unavailable."
             )
-            loss = compute_loss(comp=out_im, target=optimizer.target)
+        try:
+            with torch.no_grad():
+                out_im = optimizer.get_best_discretized_image(
+                    custom_global_logits=logits_for_disc
+                )
+                loss = compute_loss(comp=out_im, target=optimizer.target)
+        finally:
+            _gpu_lock.release()
         return loss
 
     def score_swap(dg_base: torch.Tensor, band_a, band_b, direction: str):
         dg_test = merge_bands(dg_base, band_a, band_b, direction=direction)
         logits_for_disc = disc_to_logits(dg_test, num_materials, big_pos=1e5)
-        with _gpu_lock, torch.no_grad():
-            out_im = optimizer.get_best_discretized_image(
-                custom_global_logits=logits_for_disc
+        acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+        if not acquired:
+            raise RuntimeError(
+                f"GPU lock timeout: could not acquire lock within 10 seconds. "
+                f"Worker may be deadlocked or GPU unavailable."
             )
-            loss = compute_loss(comp=out_im, target=optimizer.target)
+        try:
+            with torch.no_grad():
+                out_im = optimizer.get_best_discretized_image(
+                    custom_global_logits=logits_for_disc
+                )
+                loss = compute_loss(comp=out_im, target=optimizer.target)
+        finally:
+            _gpu_lock.release()
         return loss, dg_test
 
     best_dg = disc_global.clone()
@@ -246,7 +282,7 @@ def prune_num_swaps(
                 num_swaps = len(find_color_bands(best_dg)) - 1
                 optimizer.best_params["global_logits"] = disc_to_logits(
                     best_dg, num_materials=num_materials, big_pos=1e5
-                )
+                ).to(optimizer.device)
                 tbar.set_description(
                     f"Swaps {num_swaps} | Loss {best_loss:.4f} | Merge swaps {len(merge_specs)}"
                 )
@@ -270,7 +306,7 @@ def prune_num_swaps(
     tbar.close()
     optimizer.best_params["global_logits"] = disc_to_logits(
         best_dg, num_materials=num_materials, big_pos=1e5
-    )
+    ).to(optimizer.device)
     return best_dg
 
 
@@ -440,20 +476,29 @@ def prune_redundant_layers(
         eff_logits = optimizer._apply_height_offset(
             cand_params["pixel_height_logits"], cand_params["height_offsets"]
         )
-        with _gpu_lock, torch.no_grad():
-            cand_comp = composite_image_disc(
-                eff_logits,
-                cand_params["global_logits"],
-                optimizer.vis_tau,
-                optimizer.vis_tau,
-                optimizer.h,
-                cand_max_layers,
-                optimizer.material_colors,
-                optimizer.material_TDs,
-                optimizer.background,
-                rng_seed=optimizer.best_seed,
+        acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+        if not acquired:
+            raise RuntimeError(
+                f"GPU lock timeout: could not acquire lock within 10 seconds. "
+                f"Worker may be deadlocked or GPU unavailable."
             )
-            cand_loss = compute_loss(cand_comp, optimizer.target).item()
+        try:
+            with torch.no_grad():
+                cand_comp = composite_image_disc(
+                    eff_logits,
+                    cand_params["global_logits"],
+                    optimizer.vis_tau,
+                    optimizer.vis_tau,
+                    optimizer.h,
+                    cand_max_layers,
+                    optimizer.material_colors,
+                    optimizer.material_TDs,
+                    optimizer.background,
+                    rng_seed=optimizer.best_seed,
+                )
+                cand_loss = compute_loss(cand_comp, optimizer.target).item()
+        finally:
+            _gpu_lock.release()
         return cand_loss, cand_params, cand_max_layers
 
     # ----------------------------------------------------------
@@ -554,24 +599,33 @@ def prune_redundant_layers(
 
 
 def get_initial_loss(current_max_layers, optimizer):
-    with _gpu_lock, torch.no_grad():
-        eff_logits = optimizer._apply_height_offset(
-            optimizer.best_params["pixel_height_logits"],
-            optimizer.best_params["height_offsets"],
+    acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+    if not acquired:
+        raise RuntimeError(
+            f"GPU lock timeout: could not acquire lock within 10 seconds. "
+            f"Worker may be deadlocked or GPU unavailable."
         )
-        ref_comp = composite_image_disc(
-            eff_logits,
-            optimizer.best_params["global_logits"],
-            optimizer.vis_tau,
-            optimizer.vis_tau,
-            optimizer.h,
-            current_max_layers,
-            optimizer.material_colors,
-            optimizer.material_TDs,
-            optimizer.background,
-            rng_seed=optimizer.best_seed,
-        )
-        best_loss = compute_loss(ref_comp, optimizer.target).item()
+    try:
+        with torch.no_grad():
+            eff_logits = optimizer._apply_height_offset(
+                optimizer.best_params["pixel_height_logits"],
+                optimizer.best_params["height_offsets"],
+            )
+            ref_comp = composite_image_disc(
+                eff_logits,
+                optimizer.best_params["global_logits"],
+                optimizer.vis_tau,
+                optimizer.vis_tau,
+                optimizer.h,
+                current_max_layers,
+                optimizer.material_colors,
+                optimizer.material_TDs,
+                optimizer.background,
+                rng_seed=optimizer.best_seed,
+            )
+            best_loss = compute_loss(ref_comp, optimizer.target).item()
+    finally:
+        _gpu_lock.release()
     return best_loss
 
 
@@ -753,8 +807,9 @@ def smooth_coplanar_faces(
     for dx, dy in shifts:
         # Shift the normals to obtain the neighbor's normal at each pixel.
         # Note: the normals tensor shape is (3, H, W) so we shift dims 1 and 2.
+        # dx shifts along WIDTH (columns, dim=2), dy shifts along HEIGHT (rows, dim=1)
         neighbor_normals = torch.roll(
-            torch.roll(normals, shifts=dx, dims=1), shifts=dy, dims=2
+            torch.roll(normals, shifts=dy, dims=1), shifts=dx, dims=2
         )
         # Dot product between the center normals and the neighbor normals.
         dot = (normals * neighbor_normals).sum(dim=0)
@@ -765,8 +820,9 @@ def smooth_coplanar_faces(
         # Determine which neighbors are nearly coplanar.
         mask = angle_diff < threshold_rad
         # Retrieve the corresponding neighbor heights from height_logits.
+        # height_logits shape is (H, W), so shift HEIGHT by dy (dim=0), WIDTH by dx (dim=1)
         neighbor_heights = torch.roll(
-            torch.roll(height_logits, shifts=dx, dims=0), shifts=dy, dims=1
+            torch.roll(height_logits, shifts=dy, dims=0), shifts=dx, dims=1
         )
         # Add neighbor height values where the coplanar condition is met.
         coplanar_sum += neighbor_heights * mask.float()
@@ -797,12 +853,23 @@ def optimise_swap_positions(
     num_materials = optimizer.material_colors.shape[0]
 
     def disc_loss(dg_test: torch.Tensor) -> float:
-        logits_for_disc = disc_to_logits(dg_test, num_materials, big_pos=1e5)
-        with _gpu_lock, torch.no_grad():
-            out = optimizer.get_best_discretized_image(
-                custom_global_logits=logits_for_disc
+        logits_for_disc = disc_to_logits(dg_test, num_materials, big_pos=1e5).to(
+            optimizer.device
+        )
+        acquired = _gpu_lock.acquire(timeout=10.0)  # 10-second timeout
+        if not acquired:
+            raise RuntimeError(
+                f"GPU lock timeout: could not acquire lock within 10 seconds. "
+                f"Worker may be deadlocked or GPU unavailable."
             )
-            return compute_loss(comp=out, target=optimizer.target).item()
+        try:
+            with torch.no_grad():
+                out = optimizer.get_best_discretized_image(
+                    custom_global_logits=logits_for_disc
+                )
+                return compute_loss(comp=out, target=optimizer.target).item()
+        finally:
+            _gpu_lock.release()
 
     best_dg, _ = optimizer.get_discretized_solution(best=True)
     best_loss = disc_loss(best_dg)
