@@ -300,12 +300,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     # New: choose heightmap initializer
+    # DEPRECATED: Only depth-anything v3 is now supported
     parser.add_argument(
         "--init_heightmap_method",
         type=str,
-        choices=["kmeans", "depth"],
-        default="kmeans",
-        help="Initializer for the height map: 'kmeans' (fast, default) or 'depth' (requires transformers).",
+        choices=["depth"],
+        default="depth",
+        help="Initializer for the height map: 'depth' (uses transformers Depth Anything v3 model).",
     )
     # New priority mask argument (optional)
     parser.add_argument(
@@ -408,7 +409,14 @@ def _auto_select_background_color(
     """
     if not args.auto_background_color:
         return
-    res = _compute_dominant_image_color(img_rgb, alpha)
+
+    try:
+        res = _compute_dominant_image_color(img_rgb, alpha)
+    except Exception as e:
+        print(f"Warning: Auto background color failed: {e}")
+        traceback.print_exc()
+        res = None
+
     if res is not None:
         dominant_hex, dominant_rgb = res
         diffs = material_colors_np - dominant_rgb[None, :]
@@ -524,54 +532,33 @@ def _initialize_heightmap(
     material_colors_np: np.ndarray,
     random_seed: int,
 ) -> Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
-    """Initialize the height map logits & labels using selected method.
-
-    Methods:
-        depth  : Uses an external depth estimation model (requires transformers).
-        kmeans : Clusters pixel colors into layer assignments (default).
+    """Initialize the height map logits & labels using Depth Anything v3 model.
 
     Returns:
         pixel_height_logits_init: (H,W) float32 numpy array of raw logits.
-        global_logits_init     : (L,*) global logits array or None (depth variant may not use it).
+        global_logits_init     : None (depth method does not use global logits).
         pixel_height_labels    : (H,W) int array of discrete initial layer indices.
     """
-    print("Initalizing height map. This can take a moment...")
-    if args.init_heightmap_method == "depth":
-        try:
-            from autoforge.Helper.Heightmaps.DepthEstimateHeightMap import (
-                init_height_map_depth_color_adjusted,
-            )
-        except Exception:
-            print(
-                "Error: depth initializer requested but could not be imported. Install 'transformers' and try again.",
-                file=sys.stderr,
-            )
-            raise
-        pixel_height_logits_init, pixel_height_labels = (
-            init_height_map_depth_color_adjusted(
-                output_img_np,
-                args.max_layers,
-                random_seed=random_seed,
-                focus_map=None,
-            )
+    print("Initializing height map using Depth Anything v3. This can take a moment...")
+    try:
+        from autoforge.Helper.Heightmaps.DepthEstimateHeightMap import (
+            init_height_map_depth_color_adjusted,
         )
-        global_logits_init = None
-    else:
-        pixel_height_logits_init, global_logits_init, pixel_height_labels = (
-            run_init_threads(
-                output_img_np,
-                args.max_layers,
-                args.layer_height,
-                bgr_tuple,
-                random_seed=random_seed,
-                num_threads=4,
-                init_method="kmeans",
-                cluster_layers=args.num_init_cluster_layers,
-                material_colors=material_colors_np,
-                focus_map=None,
-                num_runs=args.num_init_rounds,
-            )
+    except Exception:
+        print(
+            "Error: Depth Anything v3 initializer could not be imported. Install 'depth-anything-3' and try again.",
+            file=sys.stderr,
         )
+        raise
+    pixel_height_logits_init, pixel_height_labels = (
+        init_height_map_depth_color_adjusted(
+            output_img_np,
+            args.max_layers,
+            random_seed=random_seed,
+            focus_map=None,
+        )
+    )
+    global_logits_init = None
     return pixel_height_logits_init, global_logits_init, pixel_height_labels
 
 

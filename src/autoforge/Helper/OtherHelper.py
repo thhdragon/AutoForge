@@ -44,11 +44,36 @@ def perform_basic_check(args):
 
 
 def get_device(args) -> torch.device:
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif args.mps and torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
+    # Try to check CUDA availability with a timeout since it can hang on some systems
+    device = torch.device("cpu")
+    try:
+        import threading
+
+        cuda_available = [False]
+
+        def check_cuda():
+            try:
+                cuda_available[0] = torch.cuda.is_available()
+            except Exception:
+                cuda_available[0] = False
+
+        # Run CUDA check in a separate thread with timeout
+        cuda_check_thread = threading.Thread(target=check_cuda, daemon=True)
+        cuda_check_thread.start()
+        cuda_check_thread.join(timeout=5.0)  # 5-second timeout
+
+        if cuda_available[0]:
+            device = torch.device("cuda")
+        elif args.mps and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    except Exception as e:
+        print(
+            f"Warning: Could not fully check device availability ({e}), using CPU",
+            file=sys.stderr,
+        )
         device = torch.device("cpu")
+
     print("Using device:", device)
     return device

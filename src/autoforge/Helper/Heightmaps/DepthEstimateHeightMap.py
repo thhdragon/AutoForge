@@ -31,6 +31,8 @@ def initialize_pixel_height_logits(target):
     # Convert normalized luminance to logits using the inverse sigmoid (logit) function.
     # This ensures that jax.nn.sigmoid(pixel_height_logits) approximates normalized_lum.
     pixel_height_logits = np.log((normalized_lum + eps) / (1 - normalized_lum + eps))
+    # Bug 14 fix: Clamp logits to [-5, 5] to prevent extreme values and sigmoid saturation
+    pixel_height_logits = np.clip(pixel_height_logits, -5.0, 5.0)
     return pixel_height_logits
 
 
@@ -53,8 +55,10 @@ def init_height_map_depth_color_adjusted(
     Initialize pixel height logits by combining depth and color information while allowing a blend
     between the original luminance-based ordering and a depth-informed ordering.
 
+    Uses Depth Anything v3 (DA3MONO-LARGE) model for depth estimation.
+
     Steps:
-      1. Obtain a normalized depth map using Depth Anything v2.
+      1. Obtain a normalized depth map using Depth Anything v3 (DA3MONO-LARGE).
       2. Determine the optimal number of color clusters (between 2 and max_layers) via silhouette score.
       3. Cluster the image colors and (if needed) split clusters with large depth spreads.
       4. For each final cluster, compute its average depth and average luminance.
@@ -85,23 +89,41 @@ def init_height_map_depth_color_adjusted(
     """
 
     # ---------------------------
-    # Step 1: Obtain normalized depth map using Depth Anything v2
+    # Step 1: Obtain normalized depth map using Depth Anything v3 (DA3MONO-LARGE)
     # ---------------------------
-    # Local import to avoid making transformers a hard dependency unless this init is used.
+    # Local import to avoid making depth-anything-3 a hard dependency unless this init is used.
     try:
-        from transformers import pipeline  # type: ignore
+        from depth_anything_3.api import DepthAnything3
+        import torch
     except Exception as e:
         raise ImportError(
-            "Depth initializer requires 'transformers' installed. Install transformers to use --init_heightmap_method depth."
+            "Depth initializer requires 'depth-anything-3' installed. Install it via: pip install depth-anything-3"
         ) from e
 
     target_uint8 = target.astype(np.uint8)
-    image_pil = Image.fromarray(target_uint8)
-    pipe = pipeline(task="depth-estimation", model="depth-anything/DA3MONO-LARGE")
-    depth_result = pipe(image_pil)
-    depth_map = depth_result["depth"]
-    if hasattr(depth_map, "convert"):
-        depth_map = np.array(depth_map)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load the Depth Anything v3 model
+    model = DepthAnything3.from_pretrained("depth-anything/da3mono-large")
+    model = model.to(device=device)
+
+    # Run inference on the image - returns a PredictorOutput object
+    # model.inference expects a list of images (numpy arrays, PIL images, or paths)
+    prediction = model.inference([target_uint8])
+
+    # Extract depth map from prediction
+    # prediction.depth is shape [N, H, W], we want [0] for the first image
+    depth_map = prediction.depth[0]
+
+    # Convert to numpy if it's a tensor
+    if isinstance(depth_map, torch.Tensor):
+        depth_map = depth_map.cpu().numpy()
+
+    # Handle different data types and shapes
+    if depth_map.ndim == 3:
+        # If it has a channel dimension, take the first channel
+        depth_map = depth_map[0] if depth_map.shape[0] == 1 else depth_map[:, :, 0]
+
     depth_map = depth_map.astype(np.float32)
     # Ensure depth map matches input size
     if depth_map.shape[:2] != (target.shape[0], target.shape[1]):
@@ -119,12 +141,34 @@ def init_height_map_depth_color_adjusted(
     depth_norm = (depth_map - depth_min) / (depth_max - depth_min + eps)
 
     # ---------------------------
+    # Bug 34 Fix: Denoise depth map to reduce spurious clusters from noise
+    # Apply bilateral filtering to smooth the depth map while preserving edges
+    # ---------------------------
+    try:
+        import cv2
+
+        # Convert normalized depth to 8-bit for cv2.bilateralFilter
+        depth_norm_8bit = (depth_norm * 255).astype(np.uint8)
+        # Apply bilateral filter: kernel size 9, color sigma 75, space sigma 75
+        # This preserves edges while smoothing noise
+        depth_norm_8bit = cv2.bilateralFilter(depth_norm_8bit, 9, 75, 75)
+        # Convert back to normalized [0, 1] range
+        depth_norm = depth_norm_8bit.astype(np.float32) / 255.0
+    except ImportError:
+        # If cv2 not available, skip denoising
+        pass
+
+    # ---------------------------
     # Step 2: Find optimal number of clusters (n in [2, max_layers]) for color clustering
     # ---------------------------
     H, W, _ = target.shape
     pixels = target.reshape(-1, 3).astype(np.float32)
 
-    optimal_n = max_layers  # // 2
+    # Bug 25 fix: Prevent over-clustering on small images
+    # Don't create more clusters than we have unique pixel colors or reasonable pixel count
+    unique_pixels = np.unique(pixels, axis=0)
+    max_reasonable_clusters = min(max_layers, len(pixels) // 2, len(unique_pixels))
+    optimal_n = max(2, max_reasonable_clusters)
     # ---------------------------
     # Step 3: Perform color clustering on the full image
     # ---------------------------
@@ -307,6 +351,8 @@ def init_height_map_depth_color_adjusted(
             fm = fm[np.ix_(iy, ix)]
         new_labels = np.clip(new_labels * (1.0 + focus_boost * fm), 0.0, 1.0)
     pixel_height_logits = np.log((new_labels + eps) / (1 - new_labels + eps))
+    # Bug 14 fix: Clamp logits to [-5, 5] to prevent extreme values and sigmoid saturation
+    pixel_height_logits = np.clip(pixel_height_logits, -5.0, 5.0)
     return pixel_height_logits, final_labels.astype(np.int32)
 
 

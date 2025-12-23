@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import random
 from typing import Optional
@@ -10,13 +12,12 @@ from tqdm import tqdm
 
 from autoforge.Helper.CAdamW import CAdamW
 from autoforge.Helper.OptimizerHelper import (
+    PrecisionManager,
     composite_image_cont,
     composite_image_disc,
     deterministic_gumbel_softmax,
-    PrecisionManager,
 )
-
-from autoforge.Loss.LossFunctions import loss_fn, compute_loss
+from autoforge.Loss.LossFunctions import compute_loss, loss_fn
 
 
 class FilamentOptimizer:
@@ -34,8 +35,7 @@ class FilamentOptimizer:
         perception_loss_module: Optional[torch.nn.Module],
         focus_map: Optional[torch.Tensor] = None,
     ):
-        """
-        Initialize an optimizer instance.
+        """Initialize an optimizer instance.
 
         Args:
             args (argparse.Namespace): Command-line arguments.
@@ -47,6 +47,7 @@ class FilamentOptimizer:
             device (torch.device): Device to run the optimization on.
             perception_loss_module (torch.nn.Module): Module to compute perceptual loss.
             focus_map (torch.Tensor | None): Optional priority mask [H,W] in [0,1]. Higher -> higher loss weight.
+
         """
         self.args = args
         self.target = target  # smaller (solver) resolution, shape [H,W,3], float32
@@ -62,7 +63,9 @@ class FilamentOptimizer:
         # pixel_height_logits_init[pixel_height_labels == 0] = -13.815512
 
         self.pixel_height_logits = torch.tensor(
-            pixel_height_logits_init, dtype=torch.float32, device=device
+            pixel_height_logits_init,
+            dtype=torch.float32,
+            device=device,
         )
         # Base logits are frozen
         self.pixel_height_logits.requires_grad_(False)
@@ -70,10 +73,12 @@ class FilamentOptimizer:
         print("layers", int(pixel_height_labels.flatten().max()))
         self.cluster_layers = int(pixel_height_labels.flatten().max()) + 1
         self.pixel_height_labels = torch.tensor(
-            pixel_height_labels, dtype=torch.int32, device=device
+            pixel_height_labels,
+            dtype=torch.int32,
+            device=device,
         )
         self.height_offsets = torch.nn.Parameter(
-            torch.zeros(self.cluster_layers, 1, device=device)
+            torch.zeros(self.cluster_layers, 1, device=device),
         )  # Trainable
 
         # Basic hyper-params
@@ -90,9 +95,12 @@ class FilamentOptimizer:
 
         # Validate tau schedule parameters
         if self.init_tau < self.final_tau:
-            raise ValueError(
+            msg = (
                 f"init_tau ({self.init_tau}) must be >= final_tau ({self.final_tau}). "
                 f"Tau annealing requires init_tau >= final_tau for temperature to cool over time."
+            )
+            raise ValueError(
+                msg,
             )
 
         self.device = device
@@ -127,7 +135,9 @@ class FilamentOptimizer:
             num_materials = material_colors.shape[0]
             global_logits_init = (
                 torch.ones(
-                    (self.max_layers, num_materials), dtype=torch.float32, device=device
+                    (self.max_layers, num_materials),
+                    dtype=torch.float32,
+                    device=device,
                 )
                 * -1.0
             )
@@ -138,14 +148,17 @@ class FilamentOptimizer:
         # Convert only if numpy array
         if isinstance(global_logits_init, np.ndarray):
             global_logits_init = torch.from_numpy(global_logits_init).to(
-                dtype=torch.float32, device=device
+                dtype=torch.float32,
+                device=device,
             )
         elif torch.is_tensor(global_logits_init):
             global_logits_init = global_logits_init.to(
-                dtype=torch.float32, device=device
+                dtype=torch.float32,
+                device=device,
             )
         else:
-            raise TypeError("global_logits_init must be a numpy array or torch Tensor")
+            msg = "global_logits_init must be a numpy array or torch Tensor"
+            raise TypeError(msg)
         global_logits_init.requires_grad_(True)
 
         self.loss = None
@@ -159,7 +172,8 @@ class FilamentOptimizer:
         # Tau schedule
         self.num_steps_done = 0
         self.warmup_steps = min(
-            args.iterations - 1, args.warmup_fraction * args.iterations
+            args.iterations - 1,
+            args.warmup_fraction * args.iterations,
         )
         # Compute decay rate with protection against division by near-zero denominator
         iterations_after_warmup = max(1, args.iterations - self.warmup_steps)
@@ -185,29 +199,31 @@ class FilamentOptimizer:
             self.fig, self.ax = plt.subplots(2, 3, figsize=(14, 6))
 
             self.target_im_ax = self.ax[0, 0].imshow(
-                np.array(self.target.cpu(), dtype=np.uint8)
+                np.array(self.target.cpu(), dtype=np.uint8),
             )
             self.ax[0, 0].set_title("Target Image")
 
             self.current_comp_ax = self.ax[0, 1].imshow(
-                np.zeros((self.H, self.W, 3), dtype=np.uint8)
+                np.zeros((self.H, self.W, 3), dtype=np.uint8),
             )
             self.ax[0, 1].set_title("Current Composite")
 
             self.best_comp_ax = self.ax[0, 2].imshow(
-                np.zeros((self.H, self.W, 3), dtype=np.uint8)
+                np.zeros((self.H, self.W, 3), dtype=np.uint8),
             )
             self.ax[0, 2].set_title("Best Discrete Composite")
             if self.args.disable_visualization_for_gradio != 1:
                 plt.pause(0.1)
 
             self.depth_map_ax = self.ax[1, 0].imshow(
-                np.zeros((self.H, self.W), dtype=np.uint8), cmap="viridis"
+                np.zeros((self.H, self.W), dtype=np.uint8),
+                cmap="viridis",
             )
             self.ax[1, 0].set_title("Current Height Map")
 
             self.diff_depth_map_ax = self.ax[1, 1].imshow(
-                np.zeros((self.H, self.W), dtype=np.uint8), cmap="viridis"
+                np.zeros((self.H, self.W), dtype=np.uint8),
+                cmap="viridis",
             )
             self.ax[1, 1].set_title("Height Map Changes")
 
@@ -222,7 +238,10 @@ class FilamentOptimizer:
                     fm_norm = np.zeros_like(fm_np)
                 fm_uint8 = (fm_norm * 255).astype(np.uint8)
                 self.priority_mask_ax = self.ax[1, 2].imshow(
-                    fm_uint8, cmap="magma", vmin=0, vmax=255
+                    fm_uint8,
+                    cmap="magma",
+                    vmin=0,
+                    vmax=255,
                 )
                 self.ax[1, 2].set_title("Priority Mask")
             else:
@@ -241,14 +260,14 @@ class FilamentOptimizer:
             # Compute and store the initial height map for later difference computation.
             with torch.no_grad():
                 initial_height = (self.max_layers * self.h) * torch.sigmoid(
-                    self._apply_height_offset()
+                    self._apply_height_offset(),
                 )
             self.initial_height_map = initial_height.cpu().detach().numpy()
 
     def _apply_height_offset(
         self,
-        pixel_logits: Optional[torch.Tensor] = None,
-        height_offsets: Optional[torch.Tensor] = None,
+        pixel_logits: torch.Tensor | None = None,
+        height_offsets: torch.Tensor | None = None,
     ):
         if pixel_logits is None:
             pixel_logits = self.pixel_height_logits
@@ -268,32 +287,32 @@ class FilamentOptimizer:
         return pixel_logits + offsets
 
     def _get_tau(self):
-        """
-        Compute tau for height & global given how many steps we've done.
+        """Compute tau for height & global given how many steps we've done.
 
         Returns:
             Tuple[float, float]: Tau values for height and global.
+
         """
         i = self.num_steps_done
         tau_init = self.init_tau
         if i < self.warmup_steps:
             return tau_init, tau_init
-        else:
-            # simple linear decay
-            t = max(
-                self.final_tau, tau_init - self.decay_rate * (i - self.warmup_steps)
-            )
-            return t, t
+        # simple linear decay
+        t = max(
+            self.final_tau,
+            tau_init - self.decay_rate * (i - self.warmup_steps),
+        )
+        return t, t
 
     def step(self, record_best: bool = False):
-        """
-        Perform exactly one gradient-descent update step.
+        """Perform exactly one gradient-descent update step.
 
         Args:
             record_best (bool, optional): Whether to record the best discrete solution. Defaults to False.
 
         Returns:
             float: The loss value of the current step.
+
         """
         if self.pixel_height_logits.grad is not None:
             self.pixel_height_logits.grad = None
@@ -301,7 +320,7 @@ class FilamentOptimizer:
         self.optimizer.zero_grad()
 
         warmup_steps = int(
-            self.args.iterations * self.args.learning_rate_warmup_fraction
+            self.args.iterations * self.args.learning_rate_warmup_fraction,
         )
 
         if self.num_steps_done < warmup_steps and warmup_steps > 0:
@@ -356,8 +375,7 @@ class FilamentOptimizer:
         max_layers: int,
         rng_seed: int = -1,
     ):
-        """
-        Convert continuous logs to discrete layer counts and discrete color IDs.
+        """Convert continuous logs to discrete layer counts and discrete color IDs.
 
         Args:
             params (dict): Dictionary containing the parameters 'pixel_height_logits' and 'global_logits'.
@@ -370,11 +388,13 @@ class FilamentOptimizer:
             tuple: A tuple containing:
                 - torch.Tensor: Discrete global material assignments, shape [max_layers].
                 - torch.Tensor: Discrete height image, shape [H, W].
+
         """
         pixel_logits = params["pixel_height_logits"]
         pixel_offset = params["height_offsets"]
         effective_logits = self._apply_height_offset(
-            pixel_logits=pixel_logits, height_offsets=pixel_offset
+            pixel_logits=pixel_logits,
+            height_offsets=pixel_offset,
         )
 
         global_logits = params["global_logits"]
@@ -386,22 +406,28 @@ class FilamentOptimizer:
         discrete_global_vals = []
         for j in range(num_layers):
             p = deterministic_gumbel_softmax(
-                global_logits[j], tau_global, hard=True, rng_seed=rng_seed + j
+                global_logits[j],
+                tau_global,
+                hard=True,
+                rng_seed=rng_seed + j,
             )
             discrete_global_vals.append(torch.argmax(p))
         discrete_global = torch.stack(discrete_global_vals, dim=0)
         return discrete_global, discrete_height_image
 
     def log_to_tensorboard(
-        self, interval: int = 100, namespace: str = "", step: int = None
+        self,
+        interval: int = 100,
+        namespace: str = "",
+        step: int = None,
     ):
-        """
-        Log metrics and images to TensorBoard.
+        """Log metrics and images to TensorBoard.
 
         Args:
             interval (int, optional): Interval for logging images. Defaults to 100.
             namespace (str, optional): Namespace prefix for logs. If provided, logs will be prefixed with this value. Defaults to "".
             step (int, optional): Optional override for the step number to log. Defaults to None.
+
         """
         with torch.no_grad():
             if not self.tensorboard_log or self.writer is None:
@@ -414,7 +440,9 @@ class FilamentOptimizer:
 
             # Log metrics
             self.writer.add_scalar(
-                f"Loss/{prefix}best_discrete", self.best_discrete_loss, steps
+                f"Loss/{prefix}best_discrete",
+                self.best_discrete_loss,
+                steps,
             )
             self.writer.add_scalar(f"Loss/{prefix}best_swaps", self.best_swaps, steps)
 
@@ -425,7 +453,9 @@ class FilamentOptimizer:
                 self.writer.add_scalar("Params/tau_height", tau_height, steps)
                 self.writer.add_scalar("Params/tau_global", tau_global, steps)
                 self.writer.add_scalar(
-                    "Params/lr", self.optimizer.param_groups[0]["lr"], steps
+                    "Params/lr",
+                    self.optimizer.param_groups[0]["lr"],
+                    steps,
                 )
                 self.writer.add_scalar("Loss/train", self.loss, steps)
 
@@ -451,11 +481,11 @@ class FilamentOptimizer:
                     )
 
     def visualize(self, interval: int = 25):
-        """
-        Update the figure if visualize_flag is True.
+        """Update the figure if visualize_flag is True.
 
         Args:
             interval (int, optional): Interval of steps to update the visualization. Defaults to 25.
+
         """
         if not self.visualize_flag:
             return
@@ -502,7 +532,7 @@ class FilamentOptimizer:
                     rng_seed=self.best_seed,
                 )
                 best_comp_np = np.clip(best_comp.cpu().detach().numpy(), 0, 255).astype(
-                    np.uint8
+                    np.uint8,
                 )
                 self.best_comp_ax.set_data(best_comp_np)
 
@@ -537,18 +567,18 @@ class FilamentOptimizer:
             self.diff_depth_map_ax.set_clim(-2.5, 2.5)
 
             self.fig.suptitle(
-                f"Step {self.num_steps_done}/{self.args.iterations}, Tau: {tau_g:.4f}, Loss: {self.loss:.4f}, Best Discrete Loss: {self.best_discrete_loss:.4f}"
+                f"Step {self.num_steps_done}/{self.args.iterations}, Tau: {tau_g:.4f}, Loss: {self.loss:.4f}, Best Discrete Loss: {self.best_discrete_loss:.4f}",
             )
             if self.args.disable_visualization_for_gradio != 1:
                 plt.pause(0.01)
             plt.savefig(self.args.output_folder + "/vis_temp.png")
 
     def get_current_parameters(self):
-        """
-        Return a copy of the current parameters (pixel_height_logits, global_logits).
+        """Return a copy of the current parameters (pixel_height_logits, global_logits).
 
         Returns:
             Dict[str, torch.Tensor]: Current parameters.
+
         """
         return {
             "pixel_height_logits": self.pixel_height_logits.detach().clone(),
@@ -557,10 +587,11 @@ class FilamentOptimizer:
         }
 
     def get_discretized_solution(
-        self, best: bool = False, custom_height_logits: torch.Tensor = None
+        self,
+        best: bool = False,
+        custom_height_logits: torch.Tensor = None,
     ):
-        """
-        Return the discrete global assignment and the discrete pixel-height map
+        """Return the discrete global assignment and the discrete pixel-height map
         for the current solution, using the current tau.
 
         Args:
@@ -569,6 +600,7 @@ class FilamentOptimizer:
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Discrete global assignment and pixel-height map.
+
         """
         if best and self.best_params is None:
             return None, None
@@ -576,7 +608,7 @@ class FilamentOptimizer:
         current_params = self.best_params.copy() if best else self.params
         if custom_height_logits is not None:
             current_params["pixel_height_logits"] = self._apply_height_offset(
-                custom_height_logits
+                custom_height_logits,
             )
 
         if best:
@@ -588,17 +620,16 @@ class FilamentOptimizer:
                 rng_seed=self.best_seed,
             )
             return disc_global, disc_height_image
-        else:
-            tau_height, tau_global = self._get_tau()
-            with torch.no_grad():
-                disc_global, disc_height_image = self.discretize_solution(
-                    current_params,
-                    tau_height,
-                    self.h,
-                    self.max_layers,
-                    rng_seed=random.randrange(1, 1000000),
-                )
-            return disc_global, disc_height_image
+        tau_height, tau_global = self._get_tau()
+        with torch.no_grad():
+            disc_global, disc_height_image = self.discretize_solution(
+                current_params,
+                tau_height,
+                self.h,
+                self.max_layers,
+                rng_seed=random.randrange(1, 1000000),
+            )
+        return disc_global, disc_height_image
 
     def get_best_discretized_image(
         self,
@@ -610,7 +641,7 @@ class FilamentOptimizer:
                 self.best_params["pixel_height_logits"],
                 self.best_params["height_offsets"],
             )
-            best_comp = composite_image_disc(
+            return composite_image_disc(
                 effective_logits
                 if custom_height_logits is None
                 else self._apply_height_offset(
@@ -629,7 +660,6 @@ class FilamentOptimizer:
                 self.background,
                 rng_seed=self.best_seed,
             )
-        return best_comp
 
     def prune(
         self,
@@ -643,10 +673,10 @@ class FilamentOptimizer:
     ):
         # Now run pruning
         from autoforge.Helper.PruningHelper import (
+            optimise_swap_positions,
             prune_num_colors,
             prune_num_swaps,
             prune_redundant_layers,
-            optimise_swap_positions,
         )
 
         if search_seed:
@@ -689,21 +719,23 @@ class FilamentOptimizer:
         optimise_swap_positions(self)
 
     def _maybe_update_best_discrete(self):
-        """
-        Discretize the current solution, compute the discrete-mode loss,
+        """Discretize the current solution, compute the discrete-mode loss,
         and update the best solution if it improves.
         """
-
-        for i in range(1):
+        for _i in range(1):
             # draw random integer seed
-            seed = np.random.randint(0, 1000000)
+            seed = np.random.default_rng().integers(0, 1000000)
 
             # 1) Discretize
             tau_g = self.vis_tau
             with torch.no_grad():
                 effective_logits = self._apply_height_offset()
-                disc_global, disc_height_image = self.discretize_solution(
-                    self.params, tau_g, self.h, self.max_layers, rng_seed=seed
+                disc_global, _disc_height_image = self.discretize_solution(
+                    self.params,
+                    tau_g,
+                    self.h,
+                    self.max_layers,
+                    rng_seed=seed,
                 )
 
                 # 2) Compute discrete-mode composite
@@ -738,10 +770,12 @@ class FilamentOptimizer:
                     self.best_step = self.num_steps_done
 
     def rng_seed_search(
-        self, start_loss: float, num_seeds: int, autoset_seed: bool = False
+        self,
+        start_loss: float,
+        num_seeds: int,
+        autoset_seed: bool = False,
     ):
-        """
-        Search for the best seed for the best discrete solution.
+        """Search for the best seed for the best discrete solution.
 
         Args:
             start_loss (float): Initial loss value.
@@ -750,11 +784,12 @@ class FilamentOptimizer:
 
         Returns:
             int: Best seed found.
+
         """
         best_seed = None
         best_loss = start_loss
-        for i in tqdm(range(num_seeds), desc="Searching for new best seed"):
-            seed = np.random.randint(0, 1000000)
+        for _i in tqdm(range(num_seeds), desc="Searching for new best seed"):
+            seed = np.random.default_rng().integers(0, 1000000)
             effective_logits = self._apply_height_offset(
                 self.best_params["pixel_height_logits"],
                 self.best_params["height_offsets"],
@@ -784,9 +819,7 @@ class FilamentOptimizer:
         return best_seed, best_loss
 
     def __del__(self):
-        """
-        Clean up resources when the optimizer is destroyed.
-        """
+        """Clean up resources when the optimizer is destroyed."""
         # Use hasattr to safely check if writer was initialized
         # (it may not be if an error occurred during __init__)
         if hasattr(self, "writer") and self.writer is not None:

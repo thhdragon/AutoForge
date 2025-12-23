@@ -1,13 +1,16 @@
 #!/usr/bin/env python
 """Test that bug #9 validation works correctly."""
+from __future__ import annotations
 
 import types
-import torch
+
 import numpy as np
+import torch
+
 from autoforge.Modules.Optimizer import FilamentOptimizer
 
 
-def test_tau_validation_fails():
+def test_tau_validation_fails() -> bool | None:
     """Test that init_tau < final_tau raises ValueError."""
     args = types.SimpleNamespace(
         iterations=2,
@@ -50,7 +53,7 @@ def test_tau_validation_fails():
         print("ERROR: Should have raised ValueError!")
         return False
     except ValueError as e:
-        print(f"✓ Validation caught error correctly:")
+        print("✓ Validation caught error correctly:")
         print(f"  {e}")
         assert "init_tau" in str(e)
         assert "final_tau" in str(e)

@@ -107,8 +107,13 @@ def segmentation_quality(
     X_subset = target_lab_reshaped[idx]
     # In rare cases (k == 1) sklearn will raise; catch and return -1
     try:
-        return silhouette_score(X_subset, lbl_subset, metric="euclidean")
-    except ValueError:
+        score = silhouette_score(X_subset, lbl_subset, metric="euclidean")
+        if np.isnan(score):
+            print("Warning: Silhouette score is NaN")
+            return -1.0
+        return score
+    except ValueError as e:
+        print(f"Warning: Silhouette score failed: {e}")
         return -1.0
 
 
@@ -666,15 +671,36 @@ def run_init_threads(
             for i in range(num_runs)
         ]
 
-    metrics = [(r[2] / r[3]) / (r[4] + 1e-6) for r in results]
-    mean_metric = np.mean(metrics)
-    std_metric = np.std(metrics)
-    min_metric = np.min(metrics)
-    max_metric = np.max(metrics)
-    print(
-        f"mean: {mean_metric}, std: {std_metric}, min: {min_metric}, max: {max_metric}",
-    )
+    # Check for bad silhouette scores and handle them properly
+    metrics = []
+    for r in results:
+        sil_score = r[4]
+        if sil_score <= -0.5:  # Sentinel value indicating error
+            print(
+                "Warning: Clustering quality poor for this run (bad silhouette score)",
+            )
+            # Use infinity so this result won't be selected as best
+            metrics.append(float("inf"))
+        else:
+            metrics.append((r[2] / r[3]) / (sil_score + 1e-6))
+
+    # Filter out infinite metrics for statistics
+    valid_metrics = [m for m in metrics if m != float("inf")]
+    if valid_metrics:
+        mean_metric = np.mean(valid_metrics)
+        std_metric = np.std(valid_metrics)
+        min_metric = np.min(valid_metrics)
+        max_metric = np.max(valid_metrics)
+        print(
+            f"mean: {mean_metric}, std: {std_metric}, min: {min_metric}, max: {max_metric}",
+        )
+    else:
+        print("Warning: All runs had poor clustering quality")
+        min_metric = float("inf")
+
     print(f"Choosing best ordering with metric: {min_metric}")
-    best_result = min(results, key=lambda x: x[2])
+    # Select based on the metric we computed (handling inf values)
+    best_idx = metrics.index(min(metrics))
+    best_result = results[best_idx]
     print(f"Best result number of cluster layers: {best_result[3]}")
     return best_result[0], best_result[1], best_result[5]

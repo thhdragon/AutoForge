@@ -57,8 +57,8 @@ def test_empty_cluster_id_alignment():
     # Run the initialization
     # Use fewer clusters to make the test more predictable
     num_clusters = 3
-    height_map = init_height_map_depth_color_adjusted(
-        target=target, max_layers=num_clusters, random_seed=42, depth_map=depth_map
+    _, height_map = init_height_map_depth_color_adjusted(
+        target=target, max_layers=num_clusters, random_seed=42
     )
 
     # Verify the height map was created
@@ -115,14 +115,10 @@ def test_specific_empty_cluster_scenario():
     # Add a tiny different region (just a few pixels)
     target[0:2, 0:2] = [230, 230, 230]  # 0.9 * 255
 
-    # Depth map with extreme spread in one small region
-    depth_map = np.ones((H, W), dtype=np.float32) * 0.5
-    depth_map[0:2, 0:2] = 0.95  # Very different depth
-
     # Use more clusters than we have distinct regions
     # This increases likelihood of empty clusters
-    height_map = init_height_map_depth_color_adjusted(
-        target=target, max_layers=5, random_seed=123, depth_map=depth_map
+    _, height_map = init_height_map_depth_color_adjusted(
+        target=target, max_layers=5, random_seed=123
     )
 
     assert height_map is not None
@@ -146,10 +142,10 @@ def test_cluster_id_consistency():
     # Random-ish pattern (uint8 expected)
     np.random.seed(42)
     target = (np.random.rand(H, W, 3) * 255).astype(np.uint8)
-    depth_map = np.random.rand(H, W).astype(np.float32)
 
-    height_map = init_height_map_depth_color_adjusted(
-        target=target, max_layers=4, random_seed=99, depth_map=depth_map
+    # Run with enough clusters to trigger potential splitting
+    pixel_height_logits, height_map = init_height_map_depth_color_adjusted(
+        target=target, max_layers=4, random_seed=99
     )
 
     unique_ids = np.unique(height_map)

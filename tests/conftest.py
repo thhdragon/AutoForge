@@ -10,6 +10,11 @@ SRC_PATH = os.path.join(PROJECT_ROOT, "src")
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
 
+# Add depth-anything-3 to path for tests
+DEPTH_ANYTHING_PATH = os.path.join(PROJECT_ROOT, "depth-anything-3", "src")
+if os.path.exists(DEPTH_ANYTHING_PATH) and DEPTH_ANYTHING_PATH not in sys.path:
+    sys.path.insert(0, DEPTH_ANYTHING_PATH)
+
 
 @pytest.fixture
 def rng():

@@ -114,13 +114,13 @@ def bleed_layer_effect(mask: torch.Tensor, strength: float = 0.1) -> torch.Tenso
         mask = mask.unsqueeze(0)  # [1,H,W]
     L, H, W = mask.shape
 
-    # 3x3 average kernel
+    # 3x3 average kernel (Bug #30 fix: include center pixel in blur)
     kernel = (
         torch.tensor(
-            [[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=mask.dtype, device=mask.device
+            [[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype=mask.dtype, device=mask.device
         )
-        / 8.0
-    )  # 8 neighbors
+        / 9.0
+    )  # All 9 pixels including center
 
     kernel = kernel.view(1, 1, 3, 3)
 

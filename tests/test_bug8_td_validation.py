@@ -1,17 +1,16 @@
-"""
-Test for Bug #8: Transmission Distance (TD) Validation
+"""Test for Bug #8: Transmission Distance (TD) Validation.
 
 Verifies that invalid TD values (≤ 0) are properly caught and rejected
 in FilamentHelper.load_materials_data_np().
 """
 
-import pytest
-import numpy as np
-import pandas as pd
-import tempfile
 import os
-from pathlib import Path
 import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -20,7 +19,7 @@ from autoforge.Helper.FilamentHelper import load_materials
 
 
 class Args:
-    """Mock args object for testing"""
+    """Mock args object for testing."""
 
     def __init__(self, csv_file="", json_file=""):
         self.csv_file = csv_file
@@ -28,7 +27,7 @@ class Args:
 
 
 def test_valid_td_values():
-    """Test that valid TD values are accepted"""
+    """Test that valid TD values are accepted."""
     # Create a temporary CSV with valid data
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:
         f.write("Brand,Name,Color,Transmissivity\n")
@@ -51,7 +50,7 @@ def test_valid_td_values():
 
 
 def test_zero_td_rejected():
-    """Test that TD = 0 is rejected with ValueError"""
+    """Test that TD = 0 is rejected with ValueError."""
     # Create a temporary CSV with zero TD
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:
         f.write("Brand,Name,Color,Transmissivity\n")
@@ -74,11 +73,11 @@ def test_zero_td_rejected():
         assert "0.0" in error_msg or "0." in error_msg
         print(f"✓ Zero TD rejected with error: {error_msg}")
     finally:
-        os.unlink(csv_path)
+        Path.unlink(csv_path)
 
 
 def test_negative_td_rejected():
-    """Test that negative TD values are rejected with ValueError"""
+    """Test that negative TD values are rejected with ValueError."""
     # Create a temporary CSV with negative TD
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:
         f.write("Brand,Name,Color,Transmissivity\n")
@@ -105,7 +104,7 @@ def test_negative_td_rejected():
 
 
 def test_multiple_invalid_tds_rejected():
-    """Test that multiple invalid TD values are all reported"""
+    """Test that multiple invalid TD values are all reported."""
     # Create a temporary CSV with multiple bad TDs
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:
         f.write("Brand,Name,Color,Transmissivity\n")
@@ -132,7 +131,7 @@ def test_multiple_invalid_tds_rejected():
 
 
 def test_tiny_positive_td_accepted():
-    """Test that very small but positive TD values are accepted"""
+    """Test that very small but positive TD values are accepted."""
     # Create a temporary CSV with tiny positive TD
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:
         f.write("Brand,Name,Color,Transmissivity\n")
